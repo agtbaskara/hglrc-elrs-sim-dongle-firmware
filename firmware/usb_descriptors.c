@@ -1,4 +1,4 @@
-// USB HID joystick device: 8 analog axes, no buttons.
+// USB composite device: HID joystick (8 axes, 16 buttons) + serial config port.
 
 #include "tusb.h"
 #include "pico/unique_id.h"
@@ -9,19 +9,20 @@
 #define USB_VID 0x1209
 #define USB_PID 0x0001
 
-// Device descriptor. bcdDevice 2.00 = HID-only version (1.00 had a serial
-// port). The bump makes Windows re-read the device.
+// Device descriptor. MISC/IAD class is required because the serial port uses
+// two interfaces. bcdDevice is bumped whenever the USB layout changes, so
+// Windows re-reads the device (2.00 was HID only, 3.00 adds buttons + serial).
 static const tusb_desc_device_t desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = 0x0200,
-    .bDeviceClass = 0x00,
-    .bDeviceSubClass = 0x00,
-    .bDeviceProtocol = 0x00,
+    .bDeviceClass = TUSB_CLASS_MISC,
+    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = USB_VID,
     .idProduct = USB_PID,
-    .bcdDevice = 0x0200,
+    .bcdDevice = 0x0300,
     .iManufacturer = 0,  // none: Linux would show "<manufacturer> <product>"
     .iProduct = 2,
     .iSerialNumber = 3,
@@ -33,8 +34,8 @@ uint8_t const *tud_descriptor_device_cb(void) {
     return (uint8_t const *)&desc_device;
 }
 
-// HID report descriptor: one joystick with 8 absolute 16-bit axes, range
-// 0..2047, and no buttons. Must match joystick_report_t.
+// HID report descriptor: one joystick with 8 absolute 16-bit axes (range
+// 0..2047) and 16 buttons. Must match joystick_report_t.
 static const uint8_t desc_hid_report[] = {
     0x05, 0x01,        // Usage Page (Generic Desktop)
     0x09, 0x04,        // Usage (Joystick)
@@ -53,6 +54,14 @@ static const uint8_t desc_hid_report[] = {
     0x75, 0x10,        //   Report Size (16)
     0x95, 0x08,        //   Report Count (8)
     0x81, 0x02,        //   Input (Data, Var, Abs)
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x01,        //   Usage Minimum (1)
+    0x29, 0x10,        //   Usage Maximum (16)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x10,        //   Report Count (16)
+    0x81, 0x02,        //   Input (Data, Var, Abs)
     0xC0,              // End Collection
 };
 
@@ -62,15 +71,19 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
     return desc_hid_report;
 }
 
-enum { ITF_NUM_HID = 0, ITF_NUM_TOTAL };
+enum { ITF_NUM_HID = 0, ITF_NUM_CDC, ITF_NUM_CDC_DATA, ITF_NUM_TOTAL };
 #define EPNUM_HID 0x81
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN)
+#define EPNUM_CDC_NOTIF 0x82
+#define EPNUM_CDC_OUT 0x03
+#define EPNUM_CDC_IN 0x83
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_CDC_DESC_LEN)
 
-// Configuration descriptor: one HID joystick interface, polled every 1 ms.
+// Configuration descriptor: HID joystick (polled every 1 ms) + serial port.
 static const uint8_t desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 4, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report),
                        EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 1),
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 5, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 };
 
 // TinyUSB callback: return the configuration descriptor.
@@ -87,6 +100,7 @@ static const char *string_desc[] = {
     "ELRS Sim Dongle",  // product
     serial_str,
     "ELRS Sim Dongle",  // HID interface
+    "ELRS Sim Dongle Config",  // serial interface
 };
 
 // TinyUSB callback: return string descriptor `index` as UTF-16.

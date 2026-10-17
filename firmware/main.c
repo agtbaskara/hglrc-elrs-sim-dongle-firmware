@@ -1,11 +1,15 @@
-// ELRS Sim Dongle firmware: CRSF from the onboard ELRS receiver in,
-// USB HID joystick with channels 1-8 as 8 analog axes out.
+// ELRS Sim Dongle firmware: CRSF from the onboard ELRS receiver in, USB HID
+// joystick (8 axes, 16 buttons) out. Which channel drives which axis or button
+// is configurable over the USB serial port (see cli.c).
 
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "hardware/uart.h"
 #include "hardware/irq.h"
 #include "tusb.h"
 
+#include "cli.h"
+#include "config.h"
 #include "crsf.h"
 #include "usb_descriptors.h"
 
@@ -17,6 +21,13 @@
 
 #define LED_PIN 25
 #define LINK_TIMEOUT 500
+
+// Button thresholds: about 1625 us / 1375 us, so a stick near centre or a
+// 3-position switch in the middle presses nothing
+#define BUTTON_HIGH (CRSF_CHANNEL_MID + 200)
+#define BUTTON_LOW (CRSF_CHANNEL_MID - 200)
+
+static volatile bool reboot_to_bootsel;
 
 // UART RX ring buffer, filled from the IRQ so USB work never drops bytes
 static uint8_t rx_ring[1024];
@@ -60,22 +71,43 @@ static uint16_t channel_to_axis(uint16_t v) {
            (CRSF_CHANNEL_MAX - CRSF_CHANNEL_MIN);
 }
 
-// Send channels 1-8 as one HID report whenever the endpoint is free
-// (i.e. on every 1 ms USB poll).
+// Build the HID report from the configured mapping and send it whenever the
+// endpoint is free (i.e. on every 1 ms USB poll).
 static void send_joystick_report(const crsf_state_t *crsf) {
     if (!tud_hid_ready())
         return;
-    joystick_report_t report;
-    for (int i = 0; i < JOYSTICK_NUM_AXES; i++)
-        report.axes[i] = channel_to_axis(crsf->channels[i]);
+    joystick_report_t report = {0};
+    for (int i = 0; i < JOYSTICK_NUM_AXES; i++) {
+        uint8_t ch = config.axis_channel[i];
+        report.axes[i] = channel_to_axis(ch ? crsf->channels[ch - 1] : CRSF_CHANNEL_MID);
+    }
+    for (int i = 0; i < JOYSTICK_NUM_BUTTONS; i++) {
+        uint8_t b = config.button_channel[i];
+        uint8_t ch = b & ~CONFIG_BUTTON_INVERT;
+        if (!ch)
+            continue;
+        uint16_t v = crsf->channels[ch - 1];
+        bool pressed = (b & CONFIG_BUTTON_INVERT) ? v < BUTTON_LOW : v > BUTTON_HIGH;
+        if (pressed)
+            report.buttons |= 1u << i;
+    }
     tud_hid_report(0, &report, sizeof(report));
 }
 
-// Main loop: USB, CRSF parsing, joystick report, and link LED
-// (solid = link, blinking = no link).
+// Host changed the serial port settings. Opening it at 1200 baud is the
+// "reboot to BOOTSEL" signal used by tools/flash.sh.
+void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
+    (void)itf;
+    if (coding->bit_rate == 1200)
+        reboot_to_bootsel = true;
+}
+
+// Main loop: USB, CRSF parsing, joystick report, serial config console, and
+// link LED (solid = link, blinking = no link).
 int main(void) {
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
+    config_load();
     rx_uart_init();
     tud_init(0);
 
@@ -98,5 +130,12 @@ int main(void) {
 
         bool link_up = crsf.last_channels_ms && now - crsf.last_channels_ms < LINK_TIMEOUT;
         gpio_put(LED_PIN, link_up ? 1 : (now / 500) & 1);
+
+        if (cli_task(&crsf, link_up) || reboot_to_bootsel) {
+            absolute_time_t until = make_timeout_time_ms(100);
+            while (!time_reached(until))
+                tud_task();  // let the last serial output go out
+            reset_usb_boot(0, 0);
+        }
     }
 }

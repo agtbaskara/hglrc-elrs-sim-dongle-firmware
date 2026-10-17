@@ -1,6 +1,8 @@
 # hglrc-elrs-sim-dongle-firmware
 
-Custom RP2040 firmware for the **HGLRC Flight Simulator Dongle (2.4G ELRS V3.0)**, a.k.a. HGLRC CRSF Joystick. It turns ELRS channels 1–8 into **8 analog axes** of a USB HID joystick for RC and FPV simulators.
+Custom RP2040 firmware for the **HGLRC Flight Simulator Dongle (2.4G ELRS V3.0)**, a.k.a. HGLRC CRSF Joystick. It turns the dongle into a USB HID joystick with **8 analog axes and 16 buttons** for RC and FPV simulators. Which ELRS channel drives which axis or button can be changed over USB serial.
+
+Default mapping (no buttons until you assign them):
 
 | Channel | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
@@ -31,6 +33,48 @@ Available e.g. from [Helimonster](https://helimonster.jp/?pid=180227901).
 2. Unplug the dongle, hold the **BOOTSEL** button, and plug it back in.
 3. Drag `elrs_sim_dongle.uf2` onto the `RPI-RP2` drive that appears.
 
+On Linux, `tools/flash.sh` can also flash without pressing the button, as long as the dongle runs this firmware or the stock firmware. It needs `picotool` and `usbutils` installed, and your user in the `dialout` group.
+
+```sh
+tools/flash.sh <uf2> [port]    # port defaults to /dev/ttyACM0
+```
+
+## Configure
+
+The dongle also shows up as a serial port (a COM port on Windows, `/dev/ttyACM0` on Linux). Open it with any serial terminal, such as PuTTY, MobaXterm, picocom or minicom. Any baud rate works except 1200, which reboots the dongle into BOOTSEL.
+
+```sh
+picocom /dev/ttyACM0
+```
+
+```
+help                       list commands
+show                       show which channel controls each axis and button
+status                     show link state and all channel values
+<axis>=<channel>           set which channel controls an axis
+b<n>=<channel> [invert]    set which channel presses button n (1-16)
+defaults                   axes on channels 1-8, no buttons
+save                       keep the current mapping after unplugging
+bootsel                    reboot into BOOTSEL for flashing
+```
+
+Axes are `x y z rx ry rz slider dial` (or `1`–`8`). A button is pressed when its channel is high (above 1625 µs), or low (below 1375 µs) with `invert`. Use `none` to switch an axis or button off.
+
+```
+> dial=none
+> b1=ch9 b2=ch10
+> show
+Axes:    X=ch1 Y=ch2 Z=ch3 Rx=ch4 Ry=ch5 Rz=ch6 Slider=ch7 Dial=none
+Buttons: B1=ch9 B2=ch10
+> save
+```
+
+A new mapping takes effect right away. Type `save` to keep it after unplugging. The saved mapping also survives firmware updates. To back up a mapping, copy the two lines from `show`. Pasting them back restores it exactly.
+
+## Troubleshooting
+
+**A 3-position switch on channel 5 only gives low and high.** ExpressLRS reserves channel 5 (AUX1) for arming and always sends it as a 2-position switch, even if the radio's channel monitor shows the middle position. Put a 2-position switch on channel 5 and move the 3-position switch to another channel, or use an ELRS mode with full-resolution channels if your radio offers one. Check with `status`, which shows the value the dongle actually receives.
+
 ## Build from source
 
 On Debian / Raspberry Pi OS:
@@ -47,7 +91,7 @@ This produces `firmware/build/elrs_sim_dongle.uf2`. Flash it as described in [Fl
 
 ## Stock firmware backup
 
-[`backup/`](backup/) has the original RP2040 and ESP8285 firmware, plus restore steps. To restore the joystick firmware, hold BOOTSEL and drag `backup/pico_full_8MB.uf2` onto the drive.
+[`backup/`](backup/) has the original RP2040 and ESP8285 firmware, plus restore steps. To restore the joystick firmware, flash `backup/pico_full_8MB.uf2` like any other UF2 (BOOTSEL and drag, or `tools/flash.sh backup/pico_full_8MB.uf2`). It takes about 2.5 minutes because it rewrites the whole flash, which also erases a saved mapping. Copy your `show` lines first if you want to keep it.
 
 ## Tools
 

@@ -9,9 +9,9 @@ include(pico_sdk_import.cmake)
 project(elrs_sim_dongle C CXX ASM)
 pico_sdk_init()
 
-add_executable(elrs_sim_dongle main.c crsf.c usb_descriptors.c)
+add_executable(elrs_sim_dongle main.c crsf.c config.c cli.c usb_descriptors.c)
 target_include_directories(elrs_sim_dongle PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(elrs_sim_dongle PRIVATE pico_stdlib pico_unique_id
-                      hardware_uart hardware_irq tinyusb_device)
+target_link_libraries(elrs_sim_dongle PRIVATE pico_stdlib pico_unique_id pico_bootrom
+                      hardware_uart hardware_irq hardware_flash hardware_sync tinyusb_device)
 
 pico_add_extra_outputs(elrs_sim_dongle)
